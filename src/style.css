@@ -1,0 +1,443 @@
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  overflow: hidden;
+}
+
+@font-face {
+  font-family: "GameFont";
+  src: url("./fonts/supply-center/Supply Center.ttf");
+}
+
+/* 2. Apply it to the game */
+body {
+  font-family: "GameFont", sans-serif;
+}
+
+.webgl {
+  position: fixed;
+  top: 0;
+  left: 0;
+  outline: none;
+}
+
+#hud {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 1000;
+  pointer-events: none; /* so it doesn't block mouse clicks */
+}
+
+/* === HEALTH FRAME === */
+#duck-health-frame {
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid #fff;
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.3);
+}
+
+/* === HEALTH ICONS === */
+#duck-health {
+  display: flex;
+  gap: 6px;
+}
+
+#duck-health img {
+  width: 40px;
+  height: 40px;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.6));
+  transition: opacity 0.3s ease, transform 0.2s ease;
+}
+
+/* Dimmed when health lost */
+#duck-health img.lost {
+  opacity: 0.3;
+}
+
+/* === SHAKE EFFECT ON HIT === */
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-5px);
+  }
+  40%,
+  80% {
+    transform: translateX(5px);
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+#duck-health-frame.hit {
+  animation: shake 0.4s;
+}
+
+/* === SCREEN FLASH === */
+#damage-flash {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 0, 0, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 999;
+  transition: opacity 0.3s ease;
+}
+
+#damage-flash.active {
+  opacity: 1;
+}
+
+/* === HEAL FLASH === */
+#heal-flash {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 255, 0, 0.4); /* Green with transparency */
+  opacity: 0;
+  pointer-events: none;
+  z-index: 999;
+  transition: opacity 0.3s ease;
+}
+
+#heal-flash.active {
+  opacity: 1;
+}
+
+/* === SCORE HUD === */
+#hud {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+
+#score-frame {
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid white;
+  border-radius: 10px;
+  padding: 6px 12px;
+  color: white;
+  font-family: "GameFont", sans-serif;
+  font-size: 1.2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#score-value {
+  color: #00ff00;
+  font-weight: bold;
+}
+
+/* #white-flash {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 9998; /* just below the overlay  
+} */
+
+#white-flash.active {
+  opacity: 1;
+}
+
+/* === LEVEL UP POPUP === */
+#level-popup {
+  position: fixed;
+  top: 30%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0); /* Start hidden and small */
+  font-family: "GameFont", sans-serif;
+  font-size: 5rem;
+  font-weight: 900;
+  color: #ffcc00; /* Gold color */
+  text-shadow: 3px 3px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000,
+    -1px 1px 0 #000, 1px 1px 0 #000, 0 0 30px rgba(255, 204, 0, 0.8); /* Glowing effect */
+  pointer-events: none;
+  z-index: 2000;
+  opacity: 0;
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    opacity 0.3s ease;
+}
+
+/* The class that triggers the animation */
+#level-popup.active {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+}
+
+/* === SKILL HUD === */
+#skill-hud {
+  position: fixed;
+  bottom: 20px;
+  left: 50%; /* Centers the left edge of the element */
+  transform: translateX(-50%); /* Shifts element back to center it perfectly */
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid #555;
+  border-radius: 2px;
+  padding: 2px 6px; /* Adjusted padding for a sleeker look */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: white;
+  font-family: "GameFont", sans-serif;
+  transition: all 0.3s ease;
+  z-index: 1000; /* Ensures it sits on top of the canvas */
+}
+
+/* New rule to control the image size */
+#skill-icon img {
+  width: 70px; /* Change this value to make it smaller/bigger */
+  height: auto; /* Keeps the aspect ratio */
+  display: block;
+}
+
+#skill-info {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+}
+
+#skill-status {
+  font-weight: bold;
+  color: #aaa;
+}
+
+#skill-counter {
+  color: #ffd700; /* Gold for progress */
+}
+#skill-icon {
+  position: relative;
+  filter: grayscale(100%); /* Ensure this is 100% for the Gray/Locked look */
+  display: flex;
+  align-items: center;
+}
+/* === UNLOCKED STATE === */
+#skill-hud.unlocked {
+  filter: grayscale(0%);
+  text-shadow: 0 0 5px #00ffff;
+  border-color: #00ffff; /* Cyan glow */
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+}
+
+#skill-hud.unlocked #skill-status {
+  color: #00ffff;
+}
+
+/* This tells the icon to stop being gray when the hud is unlocked */
+#skill-hud.unlocked #skill-icon {
+  filter: grayscale(0%);
+  /* Optional: Add a blue glow to the icon itself */
+  filter: drop-shadow(0 0 5px #00ffff);
+}
+
+/* === COOLDOWN TIMER === */
+#skill-timer-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 0%; /* Start empty */
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 1.5rem;
+  font-weight: bold;
+  transition: height 0.1s linear; /* Smooth animation optional */
+  z-index: 2; /* Ensure it sits on top of the image */
+}
+
+#skill-hud.cooldown #skill-timer-overlay {
+  /* opacity: 1; /* Show when on cooldown */
+  border-radius: 10px;
+  height: 100%;
+}
+
+#landing-page {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  /* Use the uploaded image */
+  background-image: url("./Gold Rush.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  z-index: 9999; /* Ensure it sits on top of everything */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  color: white;
+}
+
+#landing-content {
+  background: rgba(0, 0, 0, 0.6); /* Dark backdrop for readability */
+  padding: 40px;
+  border-radius: 20px;
+  border: 4px solid #ffd700; /* Gold border */
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(5px);
+}
+
+/* Typography */
+.game-title {
+  font-size: 3rem;
+  line-height: 1.2;
+  margin-bottom: 40px;
+  text-shadow: 4px 4px 0 #000;
+}
+
+.game-title .highlight {
+  color: #ffd700; /* Gold color */
+  font-size: 4rem;
+  display: block;
+  margin-top: 10px;
+}
+
+/* Buttons */
+.button-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+button {
+  font-family: "GameFont", sans-serif; /* Uses your custom font */
+  font-size: 1.5rem;
+  padding: 15px 30px;
+  background: #ff9900;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.2s;
+  border: 2px solid white;
+  box-shadow: 0 5px 0 #b36b00;
+}
+
+button:hover {
+  background: #ffb84d;
+  transform: scale(1.05);
+}
+
+button:active {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 #b36b00;
+}
+
+/* Exit Button Specifics */
+#btn-exit {
+  background: #cc3333;
+  box-shadow: 0 5px 0 #802020;
+}
+#btn-exit:hover {
+  background: #ff4d4d;
+}
+#btn-exit:active {
+  box-shadow: 0 1px 0 #802020;
+}
+
+/* Volume Slider */
+.volume-container {
+  margin-top: 20px;
+}
+
+.volume-container label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 1rem;
+  color: #ffd700;
+}
+
+input[type="range"] {
+  width: 200px;
+  cursor: pointer;
+}
+
+/* Utility to hide the menu */
+.hidden {
+  display: none !important;
+}
+
+/* GAME OVER PAGE STYLES */
+#game-over-page {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(232, 228, 201, 0.85); /* Dark background behind the menu */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  z-index: 4000; /* Ensure it sits on top of everything */
+}
+
+#game-over-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+}
+
+/* PAUSE MENU STYLES */
+#pause-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(232, 228, 201, 0.7); /* Semi-transparent dark background */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  z-index: 3000; /* Ensure it's above everything, including HUD */
+}
+
+#pause-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+}

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quack Behind! Gold Rush</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="landing-page">
+      <div id="landing-content">
+        <h1 class="game-title">
+          QUACK BEHIND!<br />
+          <span class="highlight">GOLD RUSH</span>
+        </h1>
+
+        <div class="button-container">
+          <button id="btn-start">START GAME</button>
+          <button id="btn-exit">EXIT</button>
+        </div>
+
+        <div class="volume-container">
+          <label for="bgm-slider">MUSIC VOLUME</label>
+          <input
+            type="range"
+            id="bgm-slider"
+            min="0"
+            max="1"
+            step="0.01"
+            value="0.5"
+          />
+        </div>
+      </div>
+    </div>
+
+    <div id="game-over-page" style="display: none">
+      <div id="game-over-content">
+        <h1 class="game-title">
+          GAME OVER<br />
+          <span class="highlight" id="final-score-display">SCORE: 0</span>
+        </h1>
+
+        <div class="button-container">
+          <button id="btn-restart">TRY AGAIN</button>
+          <!-- <button id="btn-quit">MAIN MENU</button> -->
+        </div>
+      </div>
+    </div>
+
+    <div id="pause-menu" style="display: none">
+      <div id="pause-content">
+        <h1 class="game-title">PAUSED<br /></h1>
+
+        <div class="button-container">
+          <button id="btn-resume">RESUME</button>
+          <button id="btn-main-menu">MAIN MENU</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="hud">
+      <div id="score-frame">
+        <span id="score-label">Score:</span>
+        <span id="score-value">0</span>
+      </div>
+
+      <div id="skill-hud" class="locked">
+        <div id="skill-icon">
+          <img src="./images/wave-logo.png" alt="Description of the image" />
+        </div>
+        <div id="skill-timer-overlay"></div>
+        <div id="skill-info">
+          <span id="skill-status">LOCKED</span>
+          <span id="skill-counter">0/5</span>
+        </div>
+      </div>
+
+      <div id="duck-health-frame">
+        <div id="duck-health"></div>
+      </div>
+
+      <div id="damage-flash"></div>
+      <div id="heal-flash"></div>
+    </div>
+    <div id="white-flash"></div>
+    <div id="level-popup">LEVEL 1</div>
+
+    <canvas class="webgl"></canvas>
+    <script type="module" src="./script.js"></script>
+  </body>
+</html>

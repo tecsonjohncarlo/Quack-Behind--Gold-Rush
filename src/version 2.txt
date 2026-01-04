@@ -1,0 +1,880 @@
+import * as THREE from 'three'
+import * as dat from 'lil-gui'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+
+// ==========================================
+// 1. PERFORMANCE UTILITIES & GLOBAL VARS
+// ==========================================
+const BLOOM_LAYER = 1
+const scene = new THREE.Scene()
+
+// Reusable vectors to prevent Garbage Collection (GC) stutter
+const _tempVec = new THREE.Vector3()
+const _tempDir = new THREE.Vector3()
+const _tempPos = new THREE.Vector3()
+
+// ==========================================
+// 2. GAME STATE
+// ==========================================
+let level = 1
+let enemiesKilled = 0
+let enemiesToNextLevel = 10
+let score = 0
+let combo = 0
+let comboTimer = null
+let isGameOver = false
+
+// Wave Skill
+const waves = []
+let waveCooldown = 0
+const waveCooldownMax = 4.0
+
+// Duck State
+let duckHealth = 5
+const maxHealth = 5
+const duckSpeed = 0.06
+let isRapidFire = false
+let enemyGlobalSpeed = 1.0
+
+// Inputs
+const keys = { w: false, a: false, s: false, d: false }
+const mouse = new THREE.Vector2()
+
+// ==========================================
+// 3. OBJECT POOLS (OPTIMIZATION)
+// ==========================================
+// Instead of creating/destroying meshes, we reuse them.
+
+const particlePool = []
+function getParticle(geometry, material) {
+    let p = particlePool.find(p => !p.visible)
+    if (p) {
+        p.visible = true
+        p.material = material // Swap material if needed, or better: use vertex colors
+        p.life = 1.0
+        return p
+    }
+    const mesh = new THREE.Mesh(geometry, material)
+    particlePool.push(mesh)
+    scene.add(mesh)
+    return mesh
+}
+
+// ==========================================
+// 4. SETUP & ASSETS
+// ==========================================
+const canvas = document.querySelector('canvas.webgl')
+const renderer = new THREE.WebGLRenderer({ canvas: canvas, powerPreference: "high-performance" })
+renderer.setSize(window.innerWidth, window.innerHeight)
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+renderer.outputColorSpace = THREE.SRGBColorSpace
+renderer.toneMapping = THREE.ACESFilmicToneMapping
+renderer.toneMappingExposure = 1.0
+// IMPORTANT: Prevent auto-clearing so we can manually layer Bloom + Base
+renderer.autoClear = false
+
+// Sizes
+const sizes = { width: window.innerWidth, height: window.innerHeight }
+const frustumSize = 35
+const aspect = sizes.width / sizes.height
+const camera = new THREE.OrthographicCamera(
+    -frustumSize * aspect / 2, frustumSize * aspect / 2,
+    frustumSize / 2, -frustumSize / 2,
+    0.1, 200
+)
+camera.position.set(0, 35, 35)
+camera.lookAt(0, 0, 0)
+scene.add(camera)
+
+// Audio Listener
+const listener = new THREE.AudioListener()
+camera.add(listener)
+
+// AUDIO SYSTEM (Optimized: Sound Pool)
+// Prevents creating new Audio objects inside loops
+const soundPool = {}
+const audioLoader = new THREE.AudioLoader()
+
+function loadSound(name, path, volume = 0.5, loop = false) {
+    soundPool[name] = { buffer: null, pool: [] }
+    audioLoader.load(path, (buffer) => {
+        soundPool[name].buffer = buffer
+        // Pre-instantiate 3 channels for this sound
+        for(let i=0; i<3; i++) {
+            const s = new THREE.Audio(listener)
+            s.setBuffer(buffer)
+            s.setVolume(volume)
+            s.setLoop(loop)
+            soundPool[name].pool.push(s)
+        }
+        if(loop) playSound(name) // Auto play if loop (bg music)
+    })
+}
+
+function playSound(name) {
+    const soundData = soundPool[name]
+    if (!soundData || !soundData.buffer) return
+
+    // Find a free channel
+    let sound = soundData.pool.find(s => !s.isPlaying)
+    if (!sound) {
+        // Expand pool if all busy
+        sound = new THREE.Audio(listener)
+        sound.setBuffer(soundData.buffer)
+        sound.setVolume(soundData.pool[0].getVolume())
+        soundData.pool.push(sound)
+    }
+    
+    // Randomize pitch slightly for repeat sounds
+    if (name === 'shoot' || name === 'hit') {
+        sound.detune = (Math.random() - 0.5) * 200
+    }
+    
+    sound.play()
+    return sound
+}
+
+// Load Sounds
+loadSound('shoot', './sounds/bottle-pop.mp3', 0.5)
+loadSound('hit', './sounds/egg_cracking.mp3', 0.8)
+loadSound('quack', './sounds/quack.mp3', 0.5)
+loadSound('wave', './sounds/water-splash.mp3', 0.5)
+loadSound('gameOver', './sounds/ash-baby-explode.mp3', 0.8)
+loadSound('flashbang', './sounds/flashbang-meme-sound.mp3', 0.8)
+loadSound('levelUp', './sounds/level-up.mp3', 0.8)
+loadSound('slowEnemy', './sounds/base-drop.mp3', 1.5)
+loadSound('heal', './sounds/heal-up.mp3', 0.8)
+loadSound('rapidFire', './sounds/rapid-fire.mp3', 0.8)
+loadSound('bgMusic', './sounds/The-Builder(chosic.com).mp3', 0.5, true)
+
+// Models & Textures
+const textureLoader = new THREE.TextureLoader()
+const gltfLoader = new GLTFLoader()
+
+// Environment
+const pmremGenerator = new THREE.PMREMGenerator(renderer)
+pmremGenerator.compileEquirectangularShader()
+new EXRLoader().load('./textures/EnviMap/forest.exr', (texture) => {
+    const envMap = pmremGenerator.fromEquirectangular(texture).texture
+    scene.environment = envMap
+    scene.background = new THREE.Color(0x538069)
+    texture.dispose()
+    pmremGenerator.dispose()
+})
+
+// Pond
+const pond = new THREE.Mesh(
+    new THREE.CircleGeometry(30, 32).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0x005EB8, side: THREE.DoubleSide, depthWrite: false })
+)
+pond.renderOrder = -1
+scene.add(pond)
+const pondBaseColor = pond.material.color.clone()
+
+// Duck
+let model = null
+gltfLoader.load('./models/Duck/glTF-Binary/Duck.glb', (gltf) => {
+    model = gltf.scene
+    model.position.y = 0.1
+    model.rotation.y += Math.PI
+    scene.add(model)
+})
+
+// Island
+gltfLoader.load('./models/Island/duck-Island.glb', (gltf) => {
+    const island = gltf.scene
+    island.scale.set(1.5, 1.5, 1.5)
+    island.rotation.y = Math.PI/2
+    scene.add(island)
+})
+
+// Enemy Assets
+let crocodileModel = null
+gltfLoader.load('./models/Crocodile/crocodile2.glb', (gltf) => {
+    crocodileModel = gltf.scene
+    crocodileModel.scale.set(0.7, 0.7, 0.7)
+    crocodileModel.traverse(c => {
+        if(c.isMesh) {
+            c.castShadow = true
+            c.rotation.y = Math.PI*0.5
+        }
+    })
+})
+
+const enemyMaps = {
+    map: textureLoader.load('/textures/ChristmasTreeOrnament015_1K-JPG/ChristmasTreeOrnament015_1K-JPG_Color.jpg'),
+    disp: textureLoader.load('/textures/ChristmasTreeOrnament015_1K-JPG/ChristmasTreeOrnament015_1K-JPG_Displacement.jpg'),
+    metal: textureLoader.load('/textures/ChristmasTreeOrnament015_1K-JPG/ChristmasTreeOrnament015_1K-JPG_Metalness.jpg'),
+    norm: textureLoader.load('/textures/ChristmasTreeOrnament015_1K-JPG/ChristmasTreeOrnament015_1K-JPG_NormalGL.jpg'),
+    rough: textureLoader.load('/textures/ChristmasTreeOrnament015_1K-JPG/ChristmasTreeOrnament015_1K-JPG_Roughness.jpg')
+}
+
+// PowerUp Assets
+const powerUpAssets = { heal: null, rapidFire: null, slowTime: null }
+const powerUpAnimations = {}
+const loadPU = (type, file, scale) => {
+    gltfLoader.load(file, (gltf) => {
+        const m = gltf.scene
+        m.scale.set(scale, scale, scale)
+        m.rotation.y = -Math.PI/2
+        m.userData.animations = gltf.animations
+        powerUpAssets[type] = m
+        powerUpAnimations[type] = gltf.animations
+    })
+}
+loadPU('heal', './models/PowerUP/health.glb', 0.5)
+loadPU('rapidFire', './models/PowerUP/projectilespeed.glb', 0.3)
+loadPU('slowTime', './models/PowerUP/enemyslow.glb', 0.5)
+
+
+// ==========================================
+// 5. GAME LOGIC ARRAYS
+// ==========================================
+const projectiles = []
+const projectileTracers = []
+const enemies = []
+const particles = []
+const enemyTrails = []
+const powerUps = []
+
+// Constants / Enums
+const ENEMY_TYPES = { NORMAL: 'normal', FAST: 'fast', TANK: 'tank', ZIGZAG: 'zigzag' }
+const POWER_TYPES = ['rapidFire', 'heal', 'slowTime']
+
+// Geometries & Materials (Shared to save memory)
+const particleGeometry = new THREE.BoxGeometry(1, 1, 1)
+const particleMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 })
+
+const projectileGeometry = new THREE.SphereGeometry(0.3, 8, 8)
+const projectileMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0xffd79a, emissive: 0xffffff, emissiveIntensity: 10, roughness: 0.05 
+})
+const projectileRedMaterial = projectileMaterial.clone()
+projectileRedMaterial.color.set(0xff0000)
+projectileRedMaterial.emissive.set(0xff0000)
+
+const trailGeometry = new THREE.RingGeometry(0.1, 0.7, 6).rotateX(-Math.PI / 2)
+const trailMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, side: THREE.DoubleSide })
+
+const waveGeometry = new THREE.RingGeometry(1.5, 2.5, 32, 1, Math.PI, Math.PI).rotateX(-Math.PI / 2)
+const waveMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.7, side: THREE.DoubleSide })
+
+
+// ==========================================
+// 6. SPAWNING FUNCTIONS
+// ==========================================
+
+function spawnDeathParticles(position, colorHex) {
+    for (let i = 0; i < 6; i++) { // Reduced count for performance
+        // Clone material only because we need specific colors/opacity per particle
+        // Ideally use InstancedMesh for this, but keeping it simple for now
+        const mat = particleMaterial.clone()
+        mat.color.set(colorHex || 0xff0000)
+        
+        // Use object pool logic here could greatly help, but requires careful material management
+        const mesh = new THREE.Mesh(particleGeometry, mat)
+        
+        mesh.position.copy(position)
+        mesh.position.x += (Math.random() - 0.5) * 0.5
+        mesh.position.z += (Math.random() - 0.5) * 0.5
+        mesh.position.y += 0.5 
+
+        const velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 0.3, 
+            (Math.random() * 0.5) + 0.1, 
+            (Math.random() - 0.5) * 0.1
+        )
+        
+        mesh.userData.rotSpeed = { x: (Math.random() - 0.5) * 10, y: (Math.random() - 0.5) * 10 }
+        scene.add(mesh)
+        
+        particles.push({ mesh, velocity, life: 1.0 })
+    }
+}
+
+function spawnWaterTrail(position) {
+    // Cloning material is necessary for opacity fading
+    const mesh = new THREE.Mesh(trailGeometry, trailMaterial.clone())
+    mesh.position.copy(position)
+    mesh.position.y = 0.05
+    scene.add(mesh)
+    enemyTrails.push({ mesh, life: 1.0 })
+}
+
+function spawnPowerUp(position) {
+    const type = POWER_TYPES[Math.floor(Math.random() * POWER_TYPES.length)]
+    const colors = { heal: 0x00ff00, rapidFire: 0xffaa00, slowTime: 0x00aaff }
+    const glowColor = colors[type] || 0xffffff
+    
+    let mesh
+    let mixer = null
+    let auraBaseScale = (type === 'rapidFire') ? 1.6 : 1.0
+
+    if (powerUpAssets[type]) {
+        mesh = powerUpAssets[type].clone()
+        const clips = powerUpAnimations[type]   
+        if (clips && clips.length > 0) {
+            mixer = new THREE.AnimationMixer(mesh)
+            // clips[0] is now a valid AnimationClip with methods intact
+            mixer.clipAction(clips[0]).play() 
+        }
+    } else {
+        mesh = new THREE.Mesh(new THREE.SphereGeometry(0.4), new THREE.MeshStandardMaterial({ color: glowColor }))
+    }
+
+    // Aura
+    const auraMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(1.5, 16, 16),
+        new THREE.MeshBasicMaterial({ color: glowColor, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false })
+    )
+    mesh.add(auraMesh)
+
+    // Light
+    const light = new THREE.PointLight(glowColor, 3.0, 8.0)
+    light.position.y = 0.5
+    mesh.add(light)
+
+    mesh.position.copy(position)
+    mesh.position.y = 1.0
+    scene.add(mesh)
+
+    powerUps.push({ mesh, type, mixer, aura: auraMesh, auraBaseScale, rotationSpeed: 1.0 + Math.random() })
+}
+
+let spawnTimer = 0
+let spawnInterval = 1.5
+
+function spawnEnemy() {
+    if (!crocodileModel) return
+
+    const angle = Math.random() * Math.PI * 2
+    const distance = 30 + Math.random() * 20
+    
+    const enemy = crocodileModel.clone()
+    enemy.position.set(Math.cos(angle) * distance, 1.3, Math.sin(angle) * distance)
+    scene.add(enemy)
+
+    // Difficulty Logic
+    let type = ENEMY_TYPES.NORMAL
+    if (level >= 2 && Math.random() < 0.3) type = ENEMY_TYPES.FAST
+    if (level >= 3 && Math.random() < 0.4) type = ENEMY_TYPES.ZIGZAG
+    if (level >= 4 && Math.random() < 0.2) type = ENEMY_TYPES.TANK
+
+    // Optimization: Don't clone deep materials if not needed. 
+    // Just traverse and set properties if we were using a shared material, 
+    // but since we want color tints, we must clone the material of the meshes.
+    enemy.traverse((child) => {
+        if (child.isMesh) {
+            child.material = child.material.clone() // Unavoidable without shaders/Instances
+            child.material.transparent = true // Enable fading
+            if (type === ENEMY_TYPES.FAST) child.material.color.set(0xffaa00)
+            if (type === ENEMY_TYPES.TANK) child.material.color.set(0x444444)
+        }
+    })
+
+    if (type === ENEMY_TYPES.TANK) enemy.scale.multiplyScalar(1.5)
+
+    enemies.push({
+        mesh: enemy,
+        radius: type === ENEMY_TYPES.TANK ? 1.2 : 1.5,
+        speed: type === ENEMY_TYPES.FAST ? 0.07 : type === ENEMY_TYPES.TANK ? 0.02 : 0.04,
+        health: type === ENEMY_TYPES.TANK ? 3 : 1,
+        type,
+        strafeOffset: Math.random() * Math.PI * 2,
+        strafeSpeed: 0.05,
+        hitTimer: 0,
+        isDying: false
+    })
+}
+
+// ==========================================
+// 7. INPUTS & ACTIONS
+// ==========================================
+const raycaster = new THREE.Raycaster()
+const rayPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+
+window.addEventListener('resize', () => {
+    sizes.width = window.innerWidth
+    sizes.height = window.innerHeight
+    const newAspect = sizes.width / sizes.height
+    camera.left = -frustumSize * newAspect / 2
+    camera.right = frustumSize * newAspect / 2
+    camera.top = frustumSize / 2
+    camera.bottom = -frustumSize / 2
+    camera.updateProjectionMatrix()
+    renderer.setSize(sizes.width, sizes.height)
+    bloomPass.resolution.set(sizes.width, sizes.height)
+})
+
+window.addEventListener('keydown', (e) => { if(keys[e.key.toLowerCase()] !== undefined) keys[e.key.toLowerCase()] = true })
+window.addEventListener('keyup', (e) => { if(keys[e.key.toLowerCase()] !== undefined) keys[e.key.toLowerCase()] = false })
+window.addEventListener('mousemove', (e) => {
+    mouse.x = (e.clientX / sizes.width) * 2 - 1
+    mouse.y = -(e.clientY / sizes.height) * 2 + 1
+})
+window.addEventListener('contextmenu', (e) => { e.preventDefault(); castWaveSkill() })
+
+window.addEventListener('click', () => {
+    if (!model || isGameOver) return
+
+    raycaster.setFromCamera(mouse, camera)
+    _tempVec.set(0,0,0) // reuse vector
+    raycaster.ray.intersectPlane(rayPlane, _tempVec)
+
+    const projectile = new THREE.Mesh(projectileGeometry, isRapidFire ? projectileRedMaterial : projectileMaterial)
+    projectile.layers.enable(BLOOM_LAYER)
+
+    // Calculate position relative to duck orientation
+    _tempDir.set(1, 0, 0).applyQuaternion(model.quaternion)
+    projectile.position.copy(model.position).add(_tempDir).add(_tempPos.set(0, 1, 0))
+    
+    projectile.scale.set(1.5, 0.7, 0.7)
+    projectile.lookAt(_tempVec)
+    scene.add(projectile)
+
+    // Calculate velocity
+    const velocity = new THREE.Vector3().subVectors(_tempVec, projectile.position)
+    velocity.y = 0
+    velocity.normalize().multiplyScalar(isRapidFire ? 0.9 : 0.5)
+
+    projectiles.push({ mesh: projectile, velocity: velocity, life: 0 })
+
+    playSound('shoot')
+
+    // Muzzle Flash
+    const flash = new THREE.PointLight(0xffaa00, 5, 5)
+    flash.position.copy(projectile.position)
+    scene.add(flash)
+    setTimeout(() => scene.remove(flash), 50)
+})
+
+function castWaveSkill() {
+    if (!model || waveCooldown > 0) return
+    playSound('wave')
+
+    raycaster.setFromCamera(mouse, camera)
+    raycaster.ray.intersectPlane(rayPlane, _tempVec)
+
+    const wave = new THREE.Mesh(waveGeometry, waveMaterial.clone())
+    wave.position.copy(model.position)
+    wave.position.y = 0.2
+    _tempVec.y = 0.2
+    wave.lookAt(_tempVec)
+    wave.scale.set(1.0, 1.0, 1.0)
+    scene.add(wave)
+
+    const direction = new THREE.Vector3().subVectors(_tempVec, model.position).normalize().multiplyScalar(0.2)
+    
+    waves.push({ mesh: wave, velocity: direction, life: 0, maxLife: 25 })
+    waveCooldown = waveCooldownMax
+}
+
+function activatePowerUp(type) {
+    if (type === 'heal') {
+        duckHealth = Math.min(maxHealth, duckHealth + 1)
+        updateDuckIcons()
+        playSound('heal')
+    }
+    if (type === 'rapidFire') {
+        isRapidFire = true
+        playSound('rapidFire')
+        setTimeout(() => isRapidFire = false, 5000)
+    }
+    if (type === 'slowTime') {
+        enemyGlobalSpeed = 0.3
+        playSound('slowEnemy')
+        setTimeout(() => enemyGlobalSpeed = 1.0, 4000)
+    }
+}
+
+// ==========================================
+// 8. POST PROCESSING
+// ==========================================
+const composer = new EffectComposer(renderer)
+const renderPass = new RenderPass(scene, camera)
+composer.addPass(renderPass)
+
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(sizes.width, sizes.height), 1.5, 0.4, 0.85)
+composer.addPass(bloomPass)
+
+// ==========================================
+// 9. UI & LOOP
+// ==========================================
+const scoreValue = document.getElementById('score-value')
+const duckHealthContainer = document.getElementById('duck-health')
+
+function updateDuckIcons() {
+    duckHealthContainer.innerHTML = ''
+    for (let i = 0; i < maxHealth; i++) {
+        const img = document.createElement('img')
+        img.src = './images/duck-health.png'
+        if (i >= duckHealth) img.classList.add('lost')
+        duckHealthContainer.appendChild(img)
+    }
+}
+updateDuckIcons()
+
+function updateScore(points) {
+    combo++
+    clearTimeout(comboTimer)
+    comboTimer = setTimeout(() => combo = 0, 2000)
+    score += points * combo
+    enemiesKilled += points
+    scoreValue.textContent = score
+    if (enemiesKilled >= enemiesToNextLevel) {
+        level++
+        enemiesKilled = 0
+        enemiesToNextLevel += 5
+        spawnInterval = Math.max(0.3, 1.0 - (level * 0.1))
+        playSound('levelUp')
+    }
+}
+
+function onGameOver() {
+    const bg = soundPool['bgMusic']?.pool.find(s=>s.isPlaying)
+    if(bg) bg.stop()
+    playSound('flashbang')
+    playSound('gameOver')
+
+    const whiteFlash = document.getElementById('white-flash')
+    whiteFlash.classList.add('active')
+
+    setTimeout(() => {
+        whiteFlash.classList.remove('active')
+        const overlay = document.createElement('div')
+        overlay.id = 'game-over-overlay'
+        overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);display:flex;flex-direction:column;justify-content:center;align-items:center;color:white;z-index:9999;opacity:0;transition:opacity 1s ease;`
+        overlay.innerHTML = `<h1>GAME OVER</h1><h2>Score: ${score}</h2><button id="retryBtn" style="padding:10px 20px; font-size:1.5em; margin-top:20px; cursor:pointer;">Retry</button>`
+        document.body.appendChild(overlay)
+        requestAnimationFrame(() => overlay.style.opacity = '1')
+        document.getElementById('retryBtn').onclick = resetGame
+    }, 600)
+}
+
+function resetGame() {
+    enemies.forEach(e => scene.remove(e.mesh))
+    projectiles.forEach(p => scene.remove(p.mesh))
+    powerUps.forEach(p => scene.remove(p.mesh))
+    waves.forEach(w => scene.remove(w.mesh))
+    enemyTrails.forEach(t => { scene.remove(t.mesh); t.mesh.material.dispose() })
+
+    enemies.length = 0; projectiles.length = 0; powerUps.length = 0; waves.length = 0; enemyTrails.length = 0
+
+    duckHealth = maxHealth
+    score = 0
+    level = 1
+    enemiesKilled = 0
+    scoreValue.textContent = 0
+    updateDuckIcons()
+    spawnTimer = 0
+    enemyGlobalSpeed = 1
+    isGameOver = false
+
+    const overlay = document.getElementById('game-over-overlay')
+    if(overlay) overlay.remove()
+    playSound('bgMusic')
+}
+
+// ==========================================
+// 10. MAIN TICK LOOP
+// ==========================================
+const clock = new THREE.Clock()
+let previousTime = 0
+
+const tick = () => {
+    const elapsedTime = clock.getElapsedTime()
+    const deltaTime = elapsedTime - previousTime
+    previousTime = elapsedTime
+
+    if (isGameOver) {
+        renderer.render(scene, camera)
+        return
+    }
+
+    // --- DUCK MOVEMENT ---
+    if (model) {
+        _tempVec.set(0,0,0) // Reset reusable vector
+        if (keys.w) _tempVec.z -= 1
+        if (keys.s) _tempVec.z += 1
+        if (keys.a) _tempVec.x -= 1
+        if (keys.d) _tempVec.x += 1
+
+        if (_tempVec.lengthSq() > 0) {
+            _tempVec.normalize().multiplyScalar(duckSpeed)
+            _tempPos.copy(model.position).add(_tempVec)
+            
+            // Boundary Check
+            if (Math.hypot(_tempPos.x, _tempPos.z) < 28.0) {
+                model.position.copy(_tempPos)
+                if (Math.random() < 0.15) spawnWaterTrail(model.position)
+            }
+        }
+
+        // Camera Follow
+        const targetCamPos = _tempPos.copy(model.position).add(new THREE.Vector3(0, 35, 35))
+        camera.position.lerp(targetCamPos, 0.1)
+        camera.lookAt(model.position)
+
+        // Rotation towards mouse
+        raycaster.setFromCamera(mouse, camera)
+        raycaster.ray.intersectPlane(rayPlane, _tempVec)
+        _tempVec.y = model.position.y
+        model.lookAt(_tempVec)
+        model.rotateY(-Math.PI / 2)
+    }
+
+    // --- SPAWNER ---
+    spawnTimer += deltaTime * enemyGlobalSpeed
+    if (spawnTimer >= spawnInterval) {
+        spawnEnemy()
+        spawnTimer = 0
+    }
+
+    // --- ENTITY UPDATES ---
+    
+    // 1. Trails (Backwards loop for deletion)
+    for (let i = enemyTrails.length - 1; i >= 0; i--) {
+        const t = enemyTrails[i]
+        t.life -= 0.015
+        t.mesh.scale.multiplyScalar(1.02)
+        t.mesh.material.opacity = t.life * 0.4
+        if (t.life <= 0) {
+            scene.remove(t.mesh)
+            t.mesh.material.dispose()
+            enemyTrails.splice(i, 1)
+        }
+    }
+
+    // 2. Projectiles
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+        const p = projectiles[i]
+        p.mesh.position.add(p.velocity)
+        p.life += p.velocity.length()
+
+        // Tracer
+        const tMesh = new THREE.Mesh(projectileGeometry, isRapidFire ? projectileRedMaterial : projectileMaterial)
+        tMesh.position.copy(p.mesh.position)
+        tMesh.scale.set(0.2, 0.2, 0.2)
+        tMesh.layers.enable(BLOOM_LAYER)
+        scene.add(tMesh)
+        projectileTracers.push({ mesh: tMesh, life: 1.0 })
+
+        if (p.life > 100) {
+            scene.remove(p.mesh)
+            projectiles.splice(i, 1)
+            continue
+        }
+
+        let hit = false
+        // Collision: Enemies
+        for (let j = enemies.length - 1; j >= 0; j--) {
+            const e = enemies[j]
+            if (e.isDying) continue
+            if (p.mesh.position.distanceTo(e.mesh.position) < (0.3 + e.radius)) {
+                
+                playSound('hit')
+                e.health--
+                e.hitTimer = 0.1
+                
+                // Knockback
+                e.mesh.position.add(p.velocity.clone().normalize().multiplyScalar(0.5))
+                
+                // Cleanup Bullet
+                scene.remove(p.mesh)
+                projectiles.splice(i, 1)
+                hit = true
+
+                if (e.health <= 0) {
+                    e.isDying = true
+                    e.deathTimer = 0.15
+                    updateScore(1)
+                    spawnDeathParticles(e.mesh.position, e.type === 'fast' ? 0xffaa00 : 0xff0000)
+                    if (Math.random() < 0.15) spawnPowerUp(e.mesh.position.clone())
+                }
+                break
+            }
+        }
+        
+        if (!hit) {
+             // Collision: PowerUps
+            for (let k = powerUps.length - 1; k >= 0; k--) {
+                const pu = powerUps[k]
+                if (p.mesh.position.distanceTo(pu.mesh.position) < 1.8) {
+                    activatePowerUp(pu.type)
+                    scene.remove(pu.mesh)
+                    scene.remove(p.mesh)
+                    projectiles.splice(i, 1)
+                    powerUps.splice(k, 1)
+                    break
+                }
+            }
+        }
+    }
+
+    // 3. Enemies
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i]
+
+        if (e.isDying) {
+            e.deathTimer -= deltaTime
+            e.mesh.scale.multiplyScalar(1.05)
+            e.mesh.traverse(c => { if(c.material) c.material.opacity = e.deathTimer * 5 })
+            
+            if (e.deathTimer <= 0) {
+                scene.remove(e.mesh)
+                // Dispose materials to clear memory
+                e.mesh.traverse(c => { if(c.material) c.material.dispose() })
+                enemies.splice(i, 1)
+            }
+            continue
+        }
+
+        // Hit Flash Logic
+        if (e.hitTimer > 0) {
+            e.hitTimer -= deltaTime
+            e.mesh.traverse(c => { if(c.isMesh) c.material.emissive.set(e.hitTimer > 0 ? 0xffffff : 0x000000) })
+        }
+
+        // Movement
+        _tempDir.subVectors(model.position, e.mesh.position).normalize()
+        
+        if (e.type === ENEMY_TYPES.ZIGZAG) {
+            e.strafeOffset += e.strafeSpeed
+            const right = _tempVec.set(-_tempDir.z, 0, _tempDir.x) // reuse tempVec for right vector
+            _tempDir.add(right.multiplyScalar(Math.sin(e.strafeOffset) * 1.1))
+        }
+
+        e.mesh.position.add(_tempDir.multiplyScalar(e.speed * enemyGlobalSpeed))
+        e.mesh.lookAt(model.position)
+
+        // Damage Player
+        if (e.mesh.position.distanceTo(model.position) < 1.5) {
+            playSound('quack')
+            scene.remove(e.mesh)
+            enemies.splice(i, 1)
+            
+            duckHealth--
+            updateDuckIcons()
+            
+            model.traverse(c => { if(c.isMesh) c.material.color.set(0xff0000) })
+            setTimeout(() => model.traverse(c => { if(c.isMesh) c.material.color.set(0xffffff) }), 200)
+
+            if (duckHealth <= 0 && !isGameOver) {
+                isGameOver = true
+                onGameOver()
+            }
+        }
+    }
+
+    // 4. Particles & Tracers
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i]
+        p.life -= deltaTime * 1.5
+        p.velocity.y -= deltaTime
+        p.mesh.position.add(p.velocity)
+        p.mesh.rotation.x += p.mesh.userData.rotSpeed.x * deltaTime
+        p.mesh.rotation.y += p.mesh.userData.rotSpeed.y * deltaTime
+        p.mesh.scale.multiplyScalar(0.95)
+        p.mesh.material.opacity = p.life
+        
+        if (p.life <= 0 || p.mesh.position.y < -1) {
+            scene.remove(p.mesh)
+            p.mesh.material.dispose() // Important!
+            particles.splice(i, 1)
+        }
+    }
+
+    for (let i = projectileTracers.length - 1; i >= 0; i--) {
+        const t = projectileTracers[i]
+        t.life -= deltaTime * 8.0
+        t.mesh.scale.multiplyScalar(0.9)
+        t.mesh.material.opacity = t.life
+        if (t.life <= 0) {
+            scene.remove(t.mesh)
+            projectileTracers.splice(i, 1)
+        }
+    }
+
+    // 5. Waves
+    if (waveCooldown > 0) waveCooldown -= deltaTime
+    for (let i = waves.length - 1; i >= 0; i--) {
+        const w = waves[i]
+        w.mesh.position.add(w.velocity)
+        if (w.mesh.scale.x < 4.0) w.mesh.scale.multiplyScalar(1.02)
+        
+        // Manual fade
+        w.life += 1
+        if(w.life > w.maxLife) {
+             w.mesh.material.opacity -= 0.05
+             if(w.mesh.material.opacity <= 0) {
+                 scene.remove(w.mesh)
+                 waves.splice(i,1)
+                 continue
+             }
+        }
+
+        // Wave Collision
+        const radius = 2.5 * w.mesh.scale.x
+        for(let e of enemies) {
+             if(e.isDying) continue
+             const dist = Math.hypot(w.mesh.position.x - e.mesh.position.x, w.mesh.position.z - e.mesh.position.z)
+             if(dist < radius) {
+                 e.health -= 1
+                 e.hitTimer = 0.1
+                 e.mesh.position.add(w.velocity.clone().normalize().multiplyScalar(0.3))
+                 if(e.health <= 0) {
+                     e.isDying = true; e.deathTimer = 0.15; updateScore(1)
+                     spawnDeathParticles(e.mesh.position, 0xff0000)
+                 }
+             }
+        }
+    }
+
+    // 6. PowerUp Animation
+    pond.material.color.copy(pondBaseColor).offsetHSL(0, 0, Math.sin(elapsedTime * 0.5) * 0.05)
+    
+    powerUps.forEach(p => {
+        if(p.mesh) p.mesh.rotation.y += p.rotationSpeed * deltaTime
+        if(p.mixer) p.mixer.update(deltaTime)
+        if(p.aura) {
+            const scale = (1.1 + Math.sin(elapsedTime * 3.0) * 0.2) * p.auraBaseScale
+            p.aura.scale.set(scale, scale, scale)
+            p.aura.material.opacity = 0.3 + Math.sin(elapsedTime * 3.0) * 0.1
+        }
+    })
+
+    // --- RENDER ---
+    // 1. Clear Screen
+    renderer.clear()
+    
+    // 2. Render Bloom Objects (Layer 1)
+    camera.layers.set(BLOOM_LAYER)
+    composer.render()
+    
+    // 3. Clear Depth but keep color (so we can draw normal objects on top/blended)
+    renderer.clearDepth()
+    
+    // 4. Render Normal Objects (Layer 0)
+    camera.layers.set(0)
+    renderer.render(scene, camera)
+
+    window.requestAnimationFrame(tick)
+}
+
+tick()
+
+// GUI (Music)
+const gui = new dat.GUI()
+const musicFolder = gui.addFolder('Music')
+const musicControls = {
+    Play: () => { if(soundPool['bgMusic']) soundPool['bgMusic'].pool.forEach(s=>s.play()) },
+    Pause: () => { if(soundPool['bgMusic']) soundPool['bgMusic'].pool.forEach(s=>s.pause()) },
+    Stop: () => { if(soundPool['bgMusic']) soundPool['bgMusic'].pool.forEach(s=>s.stop()) }
+}
+musicFolder.add(musicControls, 'Play')
+musicFolder.add(musicControls, 'Pause')
+musicFolder.add(musicControls, 'Stop')

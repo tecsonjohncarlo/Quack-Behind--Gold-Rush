@@ -1,0 +1,110 @@
+Quack Behind! Gold Rush — Gameplay Mechanics
+=========================================
+
+Overview
+--------
+- Top-down, duck-controlled action where the player defends an island and collects gold.
+- Player shoots projectiles, collects coins and power-ups, and uses a special "wave" skill.
+- Difficulty scales by levels; enemies spawn around the pond and move toward the duck.
+
+Player
+------
+- Avatar: Duck model (`models/Duck/glTF-Binary/Duck.glb`) positioned on a circular pond.
+- Movement: WASD; movement clamped inside the pond radius (~28 units).
+- Health: `duckHealth` (default 5) and `maxHealth` (5). Visualized via HUD icons.
+- Death: When `duckHealth` <= 0 the game triggers `triggerGameOver()` and shows Game Over UI.
+
+Controls
+--------
+- Move: W / A / S / D
+- Aim: Mouse position used with raycasting; duck faces cursor.
+- Shoot: Left click spawns a projectile from the duck toward cursor.
+- Wave Skill: Right click (or contextmenu) casts an area wave if unlocked and not on cooldown.
+- Pause/Resume: `Escape` toggles the pause menu; `Start`/`Restart` buttons available.
+
+Combat & Projectiles
+---------------------
+- Projectiles: Spherical meshes with configurable `projectilesSpeed` and range. Tracers and bloom for juice.
+- Rapid Fire power-up temporarily increases projectile speed and changes visual/audio feedback.
+- Collisions: Projectiles check distance against enemy radii and power-up radii; on hit, projectiles are removed.
+- Hit feedback: enemy emissive flash, knockback, particles, sound.
+
+Wave Skill
+----------
+- Unlock: Collect health power-ups while at full health to gain a stack. `skillStacksRequired` (5) to unlock.
+- Cast: Right-click or contextmenu. Spawns a ring/arc that expands and damages enemies in range.
+- Cooldown: `waveCooldownMax` (5s) and visual HUD cooldown overlay.
+
+Power-Ups
+---------
+- Types: `heal`, `rapidFire`, `slowTime` (see `POWER_TYPES`).
+- Spawn: Dropped randomly from killed enemies (chance implemented in script).
+- Behaviors:
+  - `heal`: Restores 1 health if duck is damaged. If at full health and skill locked, increments `skillStacks`. If full & unlocked, awards score.
+  - `rapidFire`: Temporarily increases projectile speed and adjusts visuals/sound.
+  - `slowTime`: Temporarily reduces `enemyGlobalSpeed` to slow enemies.
+
+Enemies
+-------
+- Types: `normal`, `fast`, `tank`, `zigzag`.
+  - `normal`: baseline speed and 1 HP.
+  - `fast`: higher speed, tinted orange, lower HP.
+  - `tank`: larger scale, more HP (3), slower movement.
+  - `zigzag`: moves with lateral offset/strafing behavior.
+- Spawn: Enemies spawn on a radius around the pond; `spawnInterval` controls spawn frequency and is reduced on level-up.
+- Enemy behavior: Move toward duck, spawn water trails occasionally, and damage player on collision (removing enemy and playing quack hit).
+
+Coins & Score
+-------------
+- Coins spawn on enemy death and are magnetized toward the duck after a short delay (`magnetDelay`).
+- Collection adds score (`updateScore`) and plays coin sound.
+- Score system includes a `combo` multiplier and per-kill/bonus values.
+
+Leveling & Difficulty
+---------------------
+- `enemiesKilled` tracked; leveling occurs when `enemiesKilled >= enemiesToNextLevel`.
+- On level up: `level` increments, `spawnInterval` decreases (min clamp), `enemiesToNextLevel` increases, and a level popup and sound play.
+
+Visuals & VFX
+-------------
+- Bloom for glowing projectiles and tracers (bloom layer). Post-processing uses `EffectComposer` and `UnrealBloomPass`.
+- Particle system for enemy deaths and small trails on water.
+- Power-ups have an aura, point light, and animated models when available.
+
+Audio
+-----
+- Background music (`bgm`) loops and respects user interaction for autoplay.
+- SFX: shooting, hit, quack, coin, heal, wave, level-up, game-over, and power-up sounds loaded through THREE audio system.
+
+UI / HUD
+--------
+- Landing page with Start/Exit. HUD shows score, level, health icons, skill HUD, and pause/game-over overlays.
+- Skill HUD indicates locked/unlocked/cooldown states and shows stack counter during charging.
+
+Memory & Cleanup
+----------------
+- `cleanUpMesh()` disposes geometries/materials and removes meshes from scene when they expire or are destroyed.
+- Arrays (enemies, projectiles, powerUps, particles, coins, waves) are cleared on reset to avoid leaks.
+
+Implementation Notes / Key Variables (in `src/script.js`)
+-------------------------------------------------------
+- Player health: `duckHealth`, `maxHealth`
+- Projectiles: `projectiles`, `projectilesSpeed`, `projectileGeometry`
+- Enemies: `enemies`, `spawnEnemy()`, `spawnInterval`, `enemyGlobalSpeed`
+- Power-ups: `powerUps`, `POWER_TYPES`, `spawnPowerUp()`, `activatePowerUp()`
+- Wave: `waves`, `castWaveSkill()`, `waveCooldown`, `waveCooldownMax`
+- Coins: `coins`, `spawnCoin()`, magnet behavior
+- Leveling: `level`, `enemiesKilled`, `enemiesToNextLevel`, `levelUp()`
+
+Next Suggested Steps
+--------------------
+- Balance tuning: adjust spawn rates, damage, and score values for a compelling difficulty curve.
+- Add visual feedback for wave targeting (cursor indicator) and clearer power-up pickup UI.
+- Persist high scores locally (localStorage) and show leaderboard on Game Over screen.
+- Add accessibility controls (rebindable keys, volume settings saved).
+
+Authors / References
+--------------------
+- Implementation references found in `src/script.js` for mechanics, audio, and asset paths.
+
+
