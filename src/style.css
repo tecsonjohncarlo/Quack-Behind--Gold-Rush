@@ -10,7 +10,7 @@ body {
 
 @font-face {
   font-family: "GameFont";
-  src: url("./fonts/supply-center/Supply Center.ttf");
+  src: url("./fonts/supply-center/Supply-Center.ttf");
 }
 
 /* 2. Apply it to the game */
