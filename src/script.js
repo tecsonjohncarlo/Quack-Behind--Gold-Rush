@@ -1195,7 +1195,7 @@ renderer.toneMappingExposure = 1.0;
 const pmremGenerator = new THREE.PMREMGenerator(renderer);
 pmremGenerator.compileEquirectangularShader();
 
-new EXRLoader().load("./textures/EnviMap/forest.exr", (texture) => {
+new EXRLoader().load("./textures/forest.exr", (texture) => {
   const envMap = pmremGenerator.fromEquirectangular(texture).texture;
 
   scene.environment = envMap;
